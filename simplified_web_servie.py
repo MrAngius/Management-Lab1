@@ -2,11 +2,13 @@ import simpy
 import random
 from matplotlib import pyplot
 import numpy
+import statistic_collector as sc
 
 
 class Queue(object):
     def __init__(self, service_time, arrival_time, num_service, seed, environment, statistics):
         self.services = simpy.Resource(environment, num_service)
+        self.server_number = num_service
         self.service_time = service_time
         self.arrival_time = arrival_time
         self.env = environment
@@ -17,17 +19,20 @@ class Queue(object):
         with self.services.request() as request:
             # this hold the request until the service is busy
             yield request
+
             # when the service is no more busy, we compute the service time
             service_time = random.expovariate(lambd=1.0 / self.service_time)
 
             # wait util the service won't finish
             yield self.env.timeout(service_time)
 
-            # print "A packet has been served at time {}".format(self.env.now)
-            self.stats.updateService((self.env.now, service_time))
+            # STATISTICS
+            self.stats.updateService(self.env.now)
             self.stats.newServed()
+            # update the customer average when a service has finished
+            self.stats.averageCustomersUpdate(self.env.now, len(self.services.queue))
 
-    def arrivals(self, queue):
+    def arrivals(self):
         while True:
             # we compute the arrival time
             inter_arrival = random.expovariate(lambd=1.0 / self.arrival_time)
@@ -35,92 +40,21 @@ class Queue(object):
             # wait until a new packet arrives
             yield self.env.timeout(inter_arrival)
 
-            # print "A packet arrived {}".format(self.env.now)
-            self.stats.updateArrival((self.env.now, inter_arrival))
+            # STATISTICS
+            self.stats.updateArrival(self.env.now)
             self.stats.newArrival()
+            # update the customer average when a new packet has arrived
+            self.stats.averageCustomersUpdate(self.env.now, len(self.services.queue))
 
             # call the service for a packet
-            self.env.process(queue.service())
-
-
-class Statistics(object):
-    def __init__(self):
-
-        self.vector_arrival = []
-        self.vector_service = []
-        self.packet_arrived = 0
-        self.packet_dropped = 0
-        self.packet_served = 0
-
-    def newArrival(self):
-        self.packet_arrived += 1
-
-    def newServed(self):
-        self.packet_served += 1
-
-    def newDropped(self):
-        self.packet_dropped += 1
-
-    def updateArrival(self, arrival_time):
-        self.vector_arrival.append(arrival_time)
-
-    def updateService(self, service_time):
-        self.vector_service.append(service_time)
-
-    def extractArrivals(self):
-        arrival_intervals = []
-        arrival_times = []
-        for arrival in self.vector_arrival:
-            arrival_times.append(arrival[0])
-            arrival_intervals.append(arrival[1])
-        return arrival_times, arrival_intervals
-
-    def extractServices(self):
-        service_intervals = []
-        service_times = []
-        for service in self.vector_service:
-            service_times.append(service[0])
-            service_intervals.append(service[1])
-        return service_times, service_intervals
-
-    def extractResponseTime(self):
-        arrival_t = self.extractArrivals()[0]
-        service_t = self.extractServices()[0]
-        response_time = []
-        for arr, ser in zip(arrival_t, service_t):
-            response_time.append(ser - arr)
-        return response_time
+            self.env.process(self.service())
 
 
 class Graphs(object):
     @staticmethod
     def printMeans(stats):
-        print "Average inter-arrival time for packets: {}".format(numpy.mean(stats.extractArrivals()[1]))
-        print "Average inter-service time for packets: {}".format(numpy.mean(stats.extractServices()[1]))
-        print "Mean response time: {}".format(numpy.mean(stats.extractResponseTime()))
-
-    # plot
-    @staticmethod
-    def plot_series(stats):
-        fig, (series_arr, series_ser) = pyplot.subplots(2, 1)
-        series_arr.plot(stats.extractArrivals()[1])
-        series_arr.set_xlabel("Samples")
-        series_arr.set_ylabel("Inter-arrival")
-        series_ser.plot(stats.extractServices()[1])
-        series_ser.set_xlabel("Samples")
-        series_ser.set_ylabel("Inter-service")
-
-    @staticmethod
-    def plot_PDF(stats):
-        fig2, (hist_arr, hist_ser) = pyplot.subplots(2, 1)
-        hist_arr.hist(stats.extractArrivals()[1], bins=100, normed=True)
-        hist_ser.hist(stats.extractServices()[1], bins=100, normed=True)
-
-    @staticmethod
-    def plot_CDF(stats):
-        fig3, (cdf_arr, cdf_ser) = pyplot.subplots(2, 1)
-        cdf_arr.hist(stats.extractArrivals()[1], bins=100, cumulative=True, normed=True)
-        cdf_ser.hist(stats.extractServices()[1], bins=100, cumulative=True, normed=True)
+        print "Average response time: {}\n".format(stats.computeAverageResponseTime())
+        print "Average number of customers: {}\n".format(stats.computeAverageCustomers())
 
     @staticmethod
     def plot_resp_time(stats):
@@ -153,27 +87,34 @@ class Graphs(object):
         pyplot.title('CDF of Response Time')
         pyplot.grid(True)
 
+    @staticmethod
+    def plot_buffer_occupancy(stats):
+        pyplot.figure(2)
+
+        # buffer series
+        pyplot.plot(stats.extractCustomerQueue())
+        pyplot.xlabel('Samples')
+        pyplot.ylabel('Number of Packets')
+        pyplot.title('Trading of Buffer Occupancy')
+        pyplot.grid(True)
 
 if __name__ == '__main__':
-    LAMBDA_ARRIVAL = 11
+    LAMBDA_ARRIVAL = 10
     MU_SERVICE = 8
-    SIM_TIME = 100000
+    SIM_TIME = 1000000
     RANDOM_SEED = 5
     SERVICE_NUMB = 1
 
     env = simpy.Environment()
-    stats = Statistics()
+    stats = sc.Statistics()
     queue = Queue(MU_SERVICE, LAMBDA_ARRIVAL, SERVICE_NUMB, RANDOM_SEED, env, stats)
-    env.process(queue.arrivals(queue))
-
+    env.process(queue.arrivals())
     env.run(until=SIM_TIME)
     print "Arrived packets: {}".format(stats.packet_arrived)
     print "Packet served: {}".format(stats.packet_served)
 
-    pyplot.close()
+    #pyplot.close()
     Graphs.printMeans(stats)
-    # Graphs.plot_series(stats)
-    # Graphs.plot_PDF(stats)
-    # Graphs.plot_CDF(stats)
     Graphs.plot_resp_time(stats)
+    Graphs.plot_buffer_occupancy(stats)
     pyplot.show()

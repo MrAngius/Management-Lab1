@@ -26,7 +26,7 @@ class ComplexQueue(Queue):
 
             # call the service for each batch
             # counter based on batch size
-            
+
 
 
 class QueueModel(object):
