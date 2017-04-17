@@ -1,8 +1,10 @@
-# definition of classes used to evaluate statistics in our simulation
 import numpy
+import math
 
 
 class Statistics(object):
+    """class used to evaluate statistics in our simulation"""
+
     def __init__(self):
         self.vector_time_arrival = []
         self.vector_time_service = []
@@ -59,8 +61,21 @@ class Statistics(object):
             temp.append(element[1])
         return temp
 
+    def batchesResponseTime(self, numb_batches, warm_up=False):
+        """extract a list of batches for the response time long vector of samples"""
+        if warm_up:
+            pass
+        else:
+            response_time = self.extractResponseTime()
+            temp = zip(*[iter(response_time)] * int(math.ceil(len(response_time) / numb_batches)))
+            if len(temp) > numb_batches:
+                temp.pop()
+                return temp
+            return temp
+
 
 class CustomerAverage(object):
+    """class used to implement the time-average-like computation, in this case for customers in the queue"""
 
     def __init__(self):
         self.total_area = 0.0
@@ -77,3 +92,30 @@ class CustomerAverage(object):
     def mean(self, final_time):
         """computation of the mean"""
         return self.total_area/final_time
+
+
+class WarmUpCut(object):
+    """class used to eliminate the transient in the acquired data performing an iterative comparison"""
+
+    def __init__(self, stop_delta, k=0):
+        self.stop_delta = stop_delta
+        self.k = k
+        self.previous_mean = 0.0
+        self.delta = 1
+
+    def eliminateWarmUpResponseTime(self, vector_data):
+        """iterate over the vector and compare the average in order to check for the steady state samples"""
+        temp_vector = []
+
+        while self.delta > self.stop_delta:
+            temp_vector = vector_data[self.k * 10:]
+            temp_mean = numpy.mean(temp_vector)
+            self.delta = abs((temp_mean - self.previous_mean) / temp_mean)
+            self.previous_mean = temp_mean
+            self.k += 1
+
+        return numpy.mean(temp_vector)
+
+    def eliminateWarmUpCustomer(self):
+        """iterate over the vector and compare the average in order to check for the steady state samples"""
+        pass

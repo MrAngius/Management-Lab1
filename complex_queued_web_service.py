@@ -1,7 +1,5 @@
-from simplified_web_servie import Queue
+from simplified_web_service import Queue
 import random
-import simpy
-from matplotlib import pyplot
 
 
 class ComplexQueue(Queue):
@@ -26,7 +24,6 @@ class ComplexQueue(Queue):
 
             # call the service for each batch
             # counter based on batch size
-
 
 
 class QueueModel(object):
