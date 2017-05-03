@@ -69,5 +69,4 @@ if __name__ == '__main__':
     queue = QueueModel(MU_SERVICE, LAMBDA_ARRIVAL, SERVICE_NUMB, RANDOM_SEED, env)
     env.process(queue.arrivals(queue))
 
-
     env.run(until=SIM_TIME)
