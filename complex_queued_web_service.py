@@ -60,6 +60,9 @@ class ComplexQueue(sw.Queue):
                 # save also the zero drop case in the vector
                 self.statistics.updateDropped(0)
 
+    def service(self):
+        return super(ComplexQueue, self).service()
+
 
 class Batch(object):
 

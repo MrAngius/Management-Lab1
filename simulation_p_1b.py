@@ -8,7 +8,13 @@ from graphs import Graphs
 from matplotlib import pyplot
 
 
+def sumPacketDropped(batch):
+    return sum(batch)
+
+
 class SimulationRohComplex(object):
+    BASE_SIM_TIME_BATCH = 10000
+
     def __init__(self, lambda_arrival, mu_service, numb_services, confidence_interval, size, a, b, warm_up=False):
 
         self.lambda_arrival = lambda_arrival
@@ -20,80 +26,69 @@ class SimulationRohComplex(object):
         self.a = a
         self.b = b
 
-    def runSim(self, long_sim=False):
+    def runSim(self, n=10):
 
-        if long_sim:
-            sim_time = 10000 * 10
-        else:
-            sim_time = 10000
+        sim_time = self.BASE_SIM_TIME_BATCH * n
 
         rand_seed = 50
         env = simpy.Environment()
-        stats = Statistics()
+        statistics = Statistics()
 
         queue = ComplexQueue(self.mu_service, self.lambda_arrival, self.numb_services, self.size,
-                             self.a, self.b, rand_seed, env, stats)
+                             self.a, self.b, rand_seed, env, statistics)
         env.process(queue.arrivals())
         env.run(until=sim_time)
 
-        return stats
+        while True:
+            if self.computeConfidenceOnTheFly(statistics, n):
+                return statistics, n
+            else:
+                sim_time = sim_time + self.BASE_SIM_TIME_BATCH
+                env.run(until=sim_time)
+                n = n + 1
 
-    def confidenceIntervalResults(self, numb_batches, p=0.2, dynamic_batch=False):
-        """compute the student's t confidence interval and iterate increasing the batches if the interval is wide"""
-        n = numb_batches
-        z_resp = 100
-        z_custom = 100
-        z_drop = 100
-        interval_resp = []
-        interval_custom = []
-        interval_drop = []
-        mean_resp = 100.0
-        mean_custom = 100.0
-        mean_drop = 100.0
+    def computeConfidenceOnTheFly(self, statistics, n=10, p=0.2, final_result=False):
 
-        stats = self.runSim(long_sim=True)
+        batches_response = statistics.batchesResponseTime(n, True)
+        batches_customers = statistics.batchesCustomerQueue(n)
+        batches_dropped = statistics.batchesDroppedPackets(n)
+
+        batches_response_means = [numpy.mean(batch) for batch in batches_response]
+        batches_customers_means = [averageCustomers(batch) for batch in batches_customers]
+        batches_dropped_means = [sumPacketDropped(batch) for batch in batches_dropped]
+
+        mean_resp = numpy.mean(batches_response_means)
+        mean_custom = numpy.mean(batches_customers_means)
+        mean_drop = numpy.mean(batches_dropped_means)
+
+        std_custom = numpy.std(batches_customers_means)
+        std_resp = numpy.std(batches_response_means)
+        std_drop = numpy.std(batches_dropped_means)
+
+        interval_resp = t.interval(self.conf_interval, n, loc=mean_resp, scale=std_resp)
+        interval_custom = t.interval(self.conf_interval, n, loc=mean_custom, scale=std_custom)
+        interval_drop = t.interval(self.conf_interval, n, loc=mean_drop, scale=std_drop)
+
+        z_resp = interval_resp[1] - mean_resp
+        z_custom = interval_custom[1] - mean_custom
+        z_drop = interval_drop[1] - mean_drop
 
         # implementing the batch number computing the confidence interval on-the-fly
-        while (2 * z_resp / mean_resp) > p and (2 * z_custom / mean_custom) and (2 * z_drop / mean_drop) > p:
-
-            batches_response = stats.batchesResponseTime(n, True)
-            batches_customers = stats.batchesCustomerQueue(n)
-            batches_dropped = stats.batchesDroppedPackets(n)
-
-            batches_response_means = [numpy.mean(batch) for batch in batches_response]
-            batches_customers_means = [averageCustomers(batch) for batch in batches_customers]
-            batches_dropped_means = [numpy.mean(batch) for batch in batches_dropped]
-
-            mean_resp = numpy.mean(batches_response_means)
-            mean_custom = numpy.mean(batches_customers_means)
-            mean_drop = numpy.mean(batches_dropped_means)
-
-            std_custom = numpy.std(batches_customers_means)
-            std_resp = numpy.std(batches_response_means)
-            std_drop = numpy.std(batches_dropped_means)
-
-            interval_resp = t.interval(self.conf_interval, n, loc=mean_resp, scale=std_resp)
-            interval_custom = t.interval(self.conf_interval, n, loc=mean_custom, scale=std_custom)
-            interval_drop = t.interval(self.conf_interval, n, loc=mean_drop, scale=std_drop)
-
-            z_resp = interval_resp[1] - mean_resp
-            z_custom = interval_custom[1] - mean_custom
-            z_drop = interval_drop[1] - mean_drop
-
-            # ____debug____
-            print n
-            print std_resp, std_custom
-
-            n += 1
-
-            if not dynamic_batch:
-                return {"mean_resp": mean_resp, "interval_resp": interval_resp,
+        if final_result:
+            return {"mean_resp": mean_resp, "interval_resp": interval_resp,
                         "mean_custom": mean_custom, "interval_custom": interval_custom,
                         "mean_dropped": mean_drop, "interval_dropped": interval_drop}
 
-        return {"mean_resp": mean_resp, "interval_resp": interval_resp,
-                "mean_custom": mean_custom, "interval_custom": interval_custom,
-                "mean_dropped": mean_drop, "interval_dropped": interval_drop}
+        elif (2 * z_resp / mean_resp) > p and (2 * z_custom / mean_custom) and (2 * z_drop / mean_drop) > p:
+
+            print n, (2 * z_resp / mean_resp), (2 * z_custom / mean_custom), (2 * z_drop / mean_drop), "\n"
+
+            if n == 30:
+                return True
+            return False
+
+        else:
+            return True
 
 
 if __name__ == '__main__':
@@ -126,9 +121,12 @@ if __name__ == '__main__':
         roh.append(MU_SERVICE / lambda_arr)
         lambda_arr -= .5
 
+    time_debug = 0
+
     for lambda_arr in lambda_arr_values:
         sim = SimulationRohComplex(lambda_arr, MU_SERVICE, SERVICE_NUMB, CONFIDENCE_INTERVAL, SIZE, A, B)
-        temp = sim.confidenceIntervalResults(25)
+        stats, batch_num = sim.runSim(n=25)
+        temp = sim.computeConfidenceOnTheFly(stats, batch_num, final_result=True)
 
         # saving the data in separate lists
         means_resp.append(temp["mean_resp"])
@@ -142,6 +140,8 @@ if __name__ == '__main__':
         lower_interval_dropped.append(temp["interval_dropped"][0])
 
         print str(temp) + "\n"
+        print str(time_debug) + "/" + str(len(lambda_arr_values)) + "\n"
+        time_debug = time_debug + 1
 
     pyplot.close()
     Graphs.meanAndConfidenceInterval(roh, means_resp, lower_interval_resp, upper_interval_resp,

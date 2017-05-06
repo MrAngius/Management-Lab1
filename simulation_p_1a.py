@@ -21,6 +21,7 @@ def averageCustomers(batch):
 
 class SimulationRoh(object):
     """class used to define a number of runs, observations, implemented using a batch-style approach"""
+    BASE_SIM_TIME_BATCH = 10000
 
     def __init__(self, lambda_arrival, mu_service, numb_services, confidence_interval, warm_up=False):
         self.lambda_arrival = lambda_arrival
@@ -29,70 +30,60 @@ class SimulationRoh(object):
         self.conf_interval = confidence_interval
         self.warm_up = warm_up
 
-    def runSim(self, long_sim=False):
+    def runSim(self, n=10):
         """run the simulation for extracting an observation of the process"""
-        if long_sim:
-            sim_time = 10000 * 10
-        else:
-            sim_time = 10000
+
+        sim_time = self.BASE_SIM_TIME_BATCH * n
 
         rand_seed = 50
         env = simpy.Environment()
-        stats = Statistics()
 
-        queue = Queue(self.mu_service, self.lambda_arrival, self.numb_services, rand_seed, env, stats)
+        statistics = Statistics()
+
+        queue = Queue(self.mu_service, self.lambda_arrival, self.numb_services, rand_seed, env, statistics)
         env.process(queue.arrivals())
         env.run(until=sim_time)
 
-        return stats
+        while True:
+            if self.computeConfidenceOnTheFly(statistics, n):
+                return statistics, n
+            else:
+                sim_time = sim_time + self.BASE_SIM_TIME_BATCH
+                env.run(until=sim_time)
+                n = n + 1
 
-    def confidenceIntervalResults(self, numb_batches, p=0.2, dynamic_batch=False):
-        """compute the student's t confidence interval and iterate increasing the batches if the interval is wide"""
-        n = numb_batches
-        z_resp = 100
-        z_custom = 100
-        interval_resp = []
-        interval_custom = []
-        mean_resp = 100.0
-        mean_custom = 100.0
+    def computeConfidenceOnTheFly(self, statistics, n=10, p=0.2, final_result=False):
 
-        stats = self.runSim(long_sim=True)
+        batches_response = statistics.batchesResponseTime(n)
+        batches_customers = statistics.batchesCustomerQueue(n)
+
+        batches_response_means = [numpy.mean(batch) for batch in batches_response]
+        batches_customers_means = [averageCustomers(batch) for batch in batches_customers]
+
+        mean_resp = numpy.mean(batches_response_means)
+        mean_custom = numpy.mean(batches_customers_means)
+
+        std_custom = numpy.std(batches_customers_means)
+        std_resp = numpy.std(batches_response_means)
+
+        interval_resp = t.interval(self.conf_interval, n, loc=mean_resp, scale=std_resp)
+        interval_custom = t.interval(self.conf_interval, n, loc=mean_custom, scale=std_custom)
+
+        z_resp = interval_resp[1] - mean_resp
+        z_custom = interval_custom[1] - mean_custom
 
         # implementing the batch number computing the confidence interval on-the-fly
-        while (2 * z_resp / mean_resp) > p and (2 * z_custom / mean_custom) > p:
+        if final_result:
+            return {"mean_resp": mean_resp, "interval_resp": interval_resp,
+                    "mean_custom": mean_custom, "interval_custom": interval_custom}
+        elif (2 * z_resp / mean_resp) > p and (2 * z_custom / mean_custom) > p:
 
-            batches_response = stats.batchesResponseTime(n)
-            batches_customers = stats.batchesCustomerQueue(n)
-
-            batches_response_means = [numpy.mean(batch) for batch in batches_response]
-            batches_customers_means = [averageCustomers(batch) for batch in batches_customers]
-
-            mean_resp = numpy.mean(batches_response_means)
-            mean_custom = numpy.mean(batches_customers_means)
-
-            std_custom = numpy.std(batches_customers_means)
-            std_resp = numpy.std(batches_response_means)
-
-            interval_resp = t.interval(self.conf_interval, n, loc=mean_resp, scale=std_resp)
-            interval_custom = t.interval(self.conf_interval, n, loc=mean_custom, scale=std_custom)
-
-            z_resp = interval_resp[1] - mean_resp
-            z_custom = interval_custom[1] - mean_custom
-
-            # ___debug___
-
-            print n
-            print std_resp, std_custom
-
-            n += 1
-
-            if not dynamic_batch:
-                return {"mean_resp": mean_resp, "interval_resp": interval_resp,
-                        "mean_custom": mean_custom, "interval_custom": interval_custom}
-
-        return {"mean_resp": mean_resp, "interval_resp": interval_resp,
-                "mean_custom": mean_custom, "interval_custom": interval_custom}
-
+            print n, (2 * z_resp / mean_resp), (2 * z_custom / mean_custom), "\n"
+            if n == 30:
+                return True
+            return False
+        else:
+            return True
 
 if __name__ == '__main__':
     LAMBDA_ARRIVAL = 10
@@ -120,7 +111,8 @@ if __name__ == '__main__':
 
     for lambda_arr in lambda_arr_values:
         sim = SimulationRoh(lambda_arr, MU_SERVICE, SERVICE_NUMB, CONFIDENCE_INTERVAL)
-        temp = sim.confidenceIntervalResults(25)
+        stats, batch_num = sim.runSim(n=25)
+        temp = sim.computeConfidenceOnTheFly(stats, batch_num, final_result=True)
 
         # saving the data in separate lists
         means_resp.append(temp["mean_resp"])
