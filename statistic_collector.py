@@ -1,6 +1,8 @@
 import numpy
 import math
 
+from graphs import Graphs
+
 
 class Statistics(object):
     """class used to evaluate statistics in our simulation"""
@@ -8,11 +10,15 @@ class Statistics(object):
     def __init__(self):
         self.vector_time_arrival = []
         self.vector_time_service = []
+        self.vector_time_service_back = []
         self.vector_packet_dropped = []
         self.packet_arrived = 0
         self.packet_served = 0
         self.avg_number_customer = CustomerAverage()
-        self.customer_buffer = []
+        self.avg_number_customer_back = CustomerAverage()
+        self.warm_up_manager = WarmUpCut(0.0000001)
+
+        self.customer_buffer_back = []
 
     def newArrival(self):
         self.packet_arrived += 1
@@ -32,16 +38,45 @@ class Statistics(object):
         """update the vector of service-time"""
         self.vector_time_service.append(service_time)
 
-    def averageCustomersUpdate(self, current_time, waiting_customers):
+    def updateServiceBack(self, service_time, back_flag=False):
+        """update the vector of service-time for back-end"""
+        if not back_flag:
+            self.vector_time_service_back.append(service_time)
+        else:
+            for k in range(len(self.vector_time_service_back)):
+                if self.vector_time_service_back[k] == -1:
+                    self.vector_time_service_back[k] = service_time
+                    break
+
+    def combineTimeOfService(self):
+        temp = []
+        zeros = []
+        for front, back in zip(self.vector_time_service, self.vector_time_service_back):
+            temp.append(front + back)
+            zeros.append(0)
+        self.vector_time_service = temp
+        # we have to reset the already added times, in case of additions due to batch dynamic
+        self.vector_time_service_back = zeros
+
+    def updateAverageCustomers(self, current_time, waiting_customers, back_flag=False):
         """save for each event the time and the number of customers in the queue"""
         self.customer_buffer.append((current_time, waiting_customers))
+        if back_flag:
+            self.customer_buffer_back.append((current_time, waiting_customers))
 
     def computeAverageCustomers(self):
         """return the average of customers in the queue"""
         for data in self.customer_buffer:
             self.avg_number_customer.update(data[0], data[1])
 
-        return self.avg_number_customer.mean(self.customer_buffer.pop()[0])
+        return self.avg_number_customer.mean(self.customer_buffer[-1][0])
+
+    def computeAverageCustomersBack(self):
+        """return the average of customers in the queue"""
+        for data in self.customer_buffer_back:
+            self.avg_number_customer_back.update(data[0], data[1])
+
+        return self.avg_number_customer_back.mean(self.customer_buffer_back[-1][0])
 
     def computeAverageResponseTime(self):
         """compute the mean of the response times for customers"""
@@ -61,8 +96,17 @@ class Statistics(object):
             temp.append(element[1])
         return temp
 
-    def batchesResponseTime(self, numb_batches, warm_up=False):
+    def extractCustomerTimeArrivalQueue(self):
+        """extract the time at witch a new customer arrives in the queue"""
+        temp = []
+        for element in self.customer_buffer:
+            temp.append(element[0])
+        return temp
+
+    def batchesResponseTime(self, numb_batches, warm_up=False, back_flag=False):
         """extract a list of batches for the response time from a long vector of samples"""
+        if back_flag:
+            self.combineTimeOfService()
         if warm_up:
             response_time = self.extractResponseTime()
             worm_cut = WarmUpCut(0.01)
@@ -80,12 +124,22 @@ class Statistics(object):
                 return temp
             return temp
 
-    def batchesCustomerQueue(self, numb_batches, warm_up=False):
+    def batchesCustomerQueue(self, numb_batches, warm_up=False, back_flag=False):
         """extract a list of batches for the number of customer in the queue from a long vector of samples"""
-        if warm_up:
-            pass
-        else:
+        if not back_flag:
             customers = self.customer_buffer
+        else:
+            customers = self.customer_buffer_back
+
+        if warm_up:
+            worm_cut = WarmUpCut(0.000001, k=0)
+            cut_customer_vector = worm_cut.eliminateWarmUpCustomer(customers)
+            temp = zip(*[iter(cut_customer_vector)] * int(math.ceil(len(cut_customer_vector) / numb_batches)))
+            if len(temp) > numb_batches:
+                temp.pop()
+                return temp
+            return temp
+        else:
             temp = zip(*[iter(customers)] * int(math.ceil(len(customers) / numb_batches)))
             if len(temp) > numb_batches:
                 temp.pop()
@@ -136,19 +190,69 @@ class WarmUpCut(object):
         self.previous_mean = 0.0
         self.delta = 1
 
+    # TODO: implement an heuristic to remove the warm up for the response time
     def eliminateWarmUpResponseTime(self, vector_data):
         """iterate over the vector and compare the average in order to check for the steady state samples"""
         temp_vector = []
+        rk = []
+        x = numpy.mean(vector_data)
 
-        while self.delta > self.stop_delta:
-            temp_vector = vector_data[self.k * 10:]
+        while self.k <= len(vector_data) / 100:
+            temp_vector = vector_data[self.k * 15:]
             temp_mean = numpy.mean(temp_vector)
-            self.delta = abs((temp_mean - self.previous_mean) / temp_mean)
+            rk.append((temp_mean - x) / x)
             self.previous_mean = temp_mean
             self.k += 1
 
+        Graphs.showRk(rk)
+        Graphs.responseTimeShow(vector_data, x)
+        Graphs.show()
+
         return temp_vector
 
-    def eliminateWarmUpCustomer(self):
+    # TODO: implement an heuristic to remove the warm up for the customers
+    def eliminateWarmUpCustomer(self, vector_data):
         """iterate over the vector and compare the average in order to check for the steady state samples"""
-        pass
+        temp_vector = []
+        rk = []
+
+        # mean computation for the customers in the queue
+        customer_avg = CustomerAverage(vector_data[0][0])
+
+        for data in vector_data:
+            customer_avg.update(data[0], data[1])
+
+        x = customer_avg.mean(vector_data[-1][0])
+
+        while self.k < len(vector_data) / 100:
+            temp_vector = vector_data[self.k * 15:]
+
+            # mean computation for the customers in the queue
+            customer_avg = CustomerAverage(temp_vector[0][0])
+
+            for data in temp_vector:
+                customer_avg.update(data[0], data[1])
+
+            customer_mean = customer_avg.mean(list(temp_vector)[-1][0])
+
+            rk.append(((customer_mean - x) / x))
+
+            # DEBUG
+            print str(((customer_mean - x) / x)) + " -- " + str(len(temp_vector)) + "/" + str(len(vector_data)) + "\n"
+            print "\n" + str(self.k) + "/" + str(len(vector_data) / 100)
+
+            self.previous_mean = customer_mean
+            self.k += 1
+
+        Graphs.showRk(rk)
+
+        time = []
+        cust = []
+        for element in vector_data:
+            time.append(element[0])
+            cust.append(element[1])
+
+        Graphs.customerQueueView(time, cust, "cust", "customer in queue")
+        Graphs.show()
+
+        return temp_vector

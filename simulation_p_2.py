@@ -1,80 +1,95 @@
-from front_back_server import FrontEndServer, BackEndServer
-from simulation_p_1b import SimulationRohComplex
-from statistic_collector import Statistics
+from simulation_p_1b import SimulationAdvancedUsingBatches
+from new_statistics import CustomerAverageStatistic, ResponseTimeAndDroppedStatistic
+from front_back_server import WebAccelerator
 from graphs import Graphs
 from matplotlib import pyplot
+from scipy.stats import t
 import simpy
+import numpy
 
 
-class SimulationRohCache(SimulationRohComplex):
-    def __init__(self, lambda_arrival, mu_service_front, mu_service_back, numb_services, confidence_interval,
-                 size, hit_cache, warm_up=False):
-        super(SimulationRohCache, self).__init__(lambda_arrival, mu_service_front, numb_services, confidence_interval,
-                                                 size, None, None, warm_up)
+class SimulationAdvancedCacheServer(SimulationAdvancedUsingBatches):
+    def __init__(self, lambda_arrival, mu_service_front, mu_service_back, numb_services_front, numb_service_back,
+                 confidence_interval, number_batches, queue_size_front, queue_size_back, a, b, hit_cache,
+                 warm_up=False):
+        SimulationAdvancedUsingBatches.__init__(self, lambda_arrival, mu_service_front, numb_services_front,
+                                                confidence_interval, number_batches, queue_size_front, a, b, warm_up)
         self.mu_service_back = mu_service_back
-        self.mu_service_front = mu_service_front
+        self.numb_services_back = numb_service_back
+        self.queue_size_back = queue_size_back
         self.hit_cache = hit_cache
+        self.stats = [ResponseTimeAndDroppedStatistic(), CustomerAverageStatistic(), CustomerAverageStatistic()]
+        self.mean_customer_back = None
+        self.interval_customer_back = None
 
-    def runSim(self, n=10):
-        sim_time = self.BASE_SIM_TIME_BATCH * n
-
-        rand_seed = 50
+    def runSim(self):
+        sim_time = self.BASE_SIM_TIME_BATCH * self.number_batches
         env = simpy.Environment()
-
-        statistics_front = Statistics()
-        statistics_back = Statistics()
-
-        back_server = BackEndServer(self.mu_service_back, self.numb_services, self.size, self.a, self.b,
-                                    rand_seed, env, statistics_back)
-
-        front_server = FrontEndServer(self.mu_service_front, self.lambda_arrival, self.numb_services, self.size,
-                                      self.a, self.b, rand_seed, env, statistics_front, back_server,
-                                      hit_cache=self.hit_cache)
-
-        env.process(front_server.arrivals())
+        queue = WebAccelerator(self.mu_service, self.mu_service_back, self.lambda_arrival, self.numb_services,
+                               self.numb_services_back, env, self.stats[0], self.stats[1], self.stats[2],
+                               self.queue_size, self.queue_size_back, self.a, self.b, self.hit_cache)
+        env.process(queue.arrivals())
         env.run(until=sim_time)
 
         while True:
-            if self.computeConfidenceOnTheFly(statistics_front, n):
-                return statistics_front, statistics_back, n
+            if self.evaluateConfidenceOnTheFly():
+                return 0
             else:
                 sim_time = sim_time + self.BASE_SIM_TIME_BATCH
                 env.run(until=sim_time)
-                n = n + 1
+                self.number_batches += 1
+
+    def computeConfidenceCustomers_back(self):
+        self.stats[2].batchesAndWarmUp(self.number_batches, self.warm_up)
+
+        batches_customers_means = [CustomerAverageStatistic.customerAverage(batch)
+                                   for batch in self.stats[2].batches_event_time_customers]
+        mean_custom = numpy.mean(batches_customers_means)
+        std_custom = numpy.std(batches_customers_means)
+        interval_custom = t.interval(self.conf_interval, self.number_batches, loc=mean_custom, scale=std_custom)
+
+        self.mean_customer_back, self.interval_customer_back = mean_custom, interval_custom
+
+    def returnValuesSimulation(self):
+        self.computeConfidenceDropped()
+        self.computeConfidenceCustomers_back()
+        return {"mean_resp": self.mean_response, "interval_resp": self.interval_response,
+                "mean_custom_front": self.mean_customer, "interval_custom_front": self.interval_customer,
+                "mean_custom_back": self.mean_customer_back, "interval_custom_back": self.interval_customer_back,
+                "mean_dropped": self.mean_drop, "interval_dropped": self.interval_drop}
 
 
 if __name__ == '__main__':
-    LAMBDA_ARRIVAL_FRONT = 10.0
+    LAMBDA_ARRIVAL_FRONT = 60.0
     MU_SERVICE_FRONT = 8.0
-    MU_SERVICE_BACK = 30.0
-    SERVICE_NUMB = 1
+    MU_SERVICE_BACK = 10.0
+    SERVICE_NUMB_FRONT = 1
+    SERVICE_NUMB_BACK = 1
+    HIT_CACHE = 30
+
+    MIN_NUMB_BATCHES = 15
     CONFIDENCE_INTERVAL = 0.95
-    HIT_CACHE = 99
-    SIZE = 100
+    SIZE_FRONT = 100
+    SIZE_BACK = 50
+    A = 3
+    B = 6
 
     # vectors for statistics in the front queue
-    means_resp_front = []
+    means_resp_time = []
     means_custom_front = []
-    means_dropped_front = []
+    means_dropped = []
 
-    upper_interval_resp_front = []
-    lower_interval_resp_front = []
+    upper_interval_resp_time = []
+    lower_interval_resp_time = []
     upper_interval_custom_front = []
     lower_interval_custom_front = []
-    upper_interval_dropped_front = []
-    lower_interval_dropped_front = []
+    upper_interval_dropped = []
+    lower_interval_dropped = []
 
     # vectors for statistics in the back queue
-    means_resp_back = []
     means_custom_back = []
-    means_dropped_back = []
-
-    upper_interval_resp_back = []
-    lower_interval_resp_back = []
     upper_interval_custom_back = []
     lower_interval_custom_back = []
-    upper_interval_dropped_back = []
-    lower_interval_dropped_back = []
 
     lambda_arr_values = []
     roh = []
@@ -84,58 +99,46 @@ if __name__ == '__main__':
     while lambda_arr > MU_SERVICE_FRONT:
         lambda_arr_values.append(lambda_arr)
         roh.append(MU_SERVICE_FRONT / lambda_arr)
-        lambda_arr -= 0.03
+        lambda_arr -= 0.5
 
     time_debug = 0
 
     for lambda_arr in lambda_arr_values:
-        sim = SimulationRohCache(lambda_arr, MU_SERVICE_FRONT, MU_SERVICE_BACK, SERVICE_NUMB,
-                                 CONFIDENCE_INTERVAL, SIZE, HIT_CACHE)
-        stats_front, stats_back, batch_num = sim.runSim(n=30)
-        temp_front = sim.computeConfidenceOnTheFly(stats_front, batch_num, final_result=True)
-        temp_back = sim.computeConfidenceOnTheFly(stats_back, batch_num, final_result=True)
+        sim = SimulationAdvancedCacheServer(lambda_arr, MU_SERVICE_FRONT, MU_SERVICE_BACK, SERVICE_NUMB_FRONT,
+                                            SERVICE_NUMB_BACK, CONFIDENCE_INTERVAL, MIN_NUMB_BATCHES, SIZE_FRONT,
+                                            SIZE_BACK, A, B, HIT_CACHE, warm_up=False)
+        sim.runSim()
+        temp = sim.returnValuesSimulation()
 
         # saving the data in separate lists for front
-        means_resp_front.append(temp_front["mean_resp"])
-        means_custom_front.append(temp_front["mean_custom"])
-        means_dropped_front.append(temp_front["mean_dropped"])
-        upper_interval_resp_front.append(temp_front["interval_resp"][1])
-        lower_interval_resp_front.append(temp_front["interval_resp"][0])
-        upper_interval_custom_front.append(temp_front["interval_custom"][1])
-        lower_interval_custom_front.append(temp_front["interval_custom"][0])
-        upper_interval_dropped_front.append(temp_front["interval_dropped"][1])
-        lower_interval_dropped_front.append(temp_front["interval_dropped"][0])
+        means_resp_time.append(temp["mean_resp"])
+        means_custom_front.append(temp["mean_custom_front"])
+        upper_interval_resp_time.append(temp["interval_resp"][1])
+        lower_interval_resp_time.append(temp["interval_resp"][0])
+        upper_interval_custom_front.append(temp["interval_custom_front"][1])
+        lower_interval_custom_front.append(temp["interval_custom_front"][0])
+        means_dropped.append(temp["mean_dropped"])
+        upper_interval_dropped.append(temp["interval_dropped"][1])
+        lower_interval_dropped.append(temp["interval_dropped"][0])
 
         # saving the data in separate lists for back
-        means_resp_back.append(temp_back["mean_resp"])
-        means_custom_back.append(temp_back["mean_custom"])
-        means_dropped_back.append(temp_back["mean_dropped"])
-        upper_interval_resp_back.append(temp_back["interval_resp"][1])
-        lower_interval_resp_back.append(temp_back["interval_resp"][0])
-        upper_interval_custom_back.append(temp_back["interval_custom"][1])
-        lower_interval_custom_back.append(temp_back["interval_custom"][0])
-        upper_interval_dropped_back.append(temp_back["interval_dropped"][1])
-        lower_interval_dropped_back.append(temp_back["interval_dropped"][0])
+        means_custom_back.append(temp["mean_custom_back"])
+        upper_interval_custom_back.append(temp["interval_custom_back"][1])
+        lower_interval_custom_back.append(temp["interval_custom_back"][0])
 
-        print str(temp_front) + "\n"
-        print str(temp_back) + "\n"
+        print str(temp) + "\n"
         print str(time_debug) + "/" + str(len(lambda_arr_values)) + "\n"
         time_debug = time_debug + 1
 
     pyplot.close()
-    Graphs.meanAndConfidenceInterval(roh, means_resp_front, lower_interval_resp_front, upper_interval_resp_front,
+    Graphs.meanAndConfidenceInterval(roh, means_resp_time, lower_interval_resp_time, upper_interval_resp_time,
                                      "Average Response Time", "Packet Response Time Front Server")
     Graphs.meanAndConfidenceInterval(roh, means_custom_front, lower_interval_custom_front, upper_interval_custom_front,
                                      "Average Customers", "Customer Buffer Occupancy Front Server")
-    Graphs.meanAndConfidenceInterval(roh, means_dropped_front, lower_interval_dropped_front,
-                                     upper_interval_dropped_front,
+    Graphs.meanAndConfidenceInterval(roh, means_dropped, lower_interval_dropped,
+                                     upper_interval_dropped,
                                      "Average Packet Dropped", "Packer Dropped Front Server")
-    Graphs.meanAndConfidenceInterval(roh, means_resp_back, lower_interval_resp_back, upper_interval_resp_back,
-                                     "Average Response Time", "Packet Response Time Back Server")
     Graphs.meanAndConfidenceInterval(roh, means_custom_back, lower_interval_custom_back, upper_interval_custom_back,
                                      "Average Customers", "Customer Buffer Occupancy Back Server")
-    # Graphs.meanAndConfidenceInterval(roh, means_dropped_back, lower_interval_dropped_back,
-    #                                  upper_interval_dropped_front,
-    #                                  "Average Packet Dropped", "Packer Dropped Back Server")
 
     pyplot.show()

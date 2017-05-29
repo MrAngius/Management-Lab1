@@ -2,38 +2,32 @@ import simpy
 import random
 
 
-class Queue(object):
-    """class defining the model of a simple queue, providing arrivals and services"""
-
-    def __init__(self, service_time, arrival_time, num_service, seed, environment, statistics):
+class Queue:
+    def __init__(self, service_time, arrival_time, num_service, environment, service_stats, customer_stats):
         self.services = simpy.Resource(environment, num_service)
         self.server_number = num_service
         self.service_time = service_time
         self.arrival_time = arrival_time
         self.env = environment
-        self.statistics = statistics
-        random.seed(seed)
 
-    def service(self):
-        """service method describing the request of a service by a customer"""
+        self.service_stats = service_stats
+        self.customer_stats = customer_stats
+        random.seed(random.randint(1, 10))
+
+    def service(self, packet):
         with self.services.request() as request:
             # this hold the request until the service is busy
             yield request
 
             # when the service is no more busy, we compute the service time
-            service_time = random.expovariate(lambd=1.0 / self.service_time)
+            inter_service = random.expovariate(lambd=1.0 / self.service_time)
 
             # wait util the service won't finish
-            yield self.env.timeout(service_time)
+            yield self.env.timeout(inter_service)
 
-            # STATISTICS
-            self.statistics.updateService(self.env.now)
-            self.statistics.newServed()
-            # update the customer average when a service has finished
-            self.statistics.averageCustomersUpdate(self.env.now, len(self.services.queue))
+            self.endService(inter_service, packet)
 
-    def arrivals(self):
-        """arrival method describing the arrive of a customer"""
+    def arrivals(self, packet=None):
         while True:
             # we compute the arrival time
             inter_arrival = random.expovariate(lambd=1.0 / self.arrival_time)
@@ -41,13 +35,50 @@ class Queue(object):
             # wait until a new packet arrives
             yield self.env.timeout(inter_arrival)
 
-            # STATISTICS
-            self.statistics.updateArrival(self.env.now)
-            self.statistics.newArrival()
-            # update the customer average when a new packet has arrived
-            self.statistics.averageCustomersUpdate(self.env.now, len(self.services.queue))
+            self.callForService(inter_arrival, self.env.now)
 
-            # call the service for a packet
-            self.env.process(self.service())
+    def callForService(self, inter_arrival, env_time):
+        # STATISTICS
+        packet = self.Packet()
+        packet.addTimeArrival(env_time)
+        packet.addComputedArrival(inter_arrival)
 
+        # update the customer average when a new packet has arrived
+        self.customer_stats.eventRegistration(env_time, len(self.services.queue))
 
+        # call the service for a packet in the batch
+        self.env.process(self.service(packet))
+
+    def endService(self, inter_service, packet):
+        # STATISTICS
+        self.customer_stats.eventRegistration(self.env.now, len(self.services.queue))
+        packet.addTimeService(self.env.now)
+        packet.addComputedService(inter_service)
+
+        # packet has been served, need to add it to the statistic's list
+        self.service_stats.addPacket(packet)
+
+    # inner class
+    class Packet:
+        def __init__(self):
+            self.time_arrived = []
+            self.time_served = []
+            self.computed_arrivals = []
+            self.computed_services = []
+            self.dropped = False
+
+        def addTimeArrival(self, time):
+            self.time_arrived.append(time)
+
+        def addTimeService(self, time):
+            self.time_served.append(time)
+
+        def addComputedArrival(self, inter_arrival):
+            self.computed_arrivals.append(inter_arrival)
+
+        def addComputedService(self, inter_service):
+            self.computed_services.append(inter_service)
+
+        def extractResponseTime(self):
+            if not self.dropped:
+                return [y - x for x, y in zip(self.time_arrived, self.time_served)]

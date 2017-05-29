@@ -1,79 +1,44 @@
 import complex_queued_web_service as cws
+import simplified_web_service as sw
 import random
 
 
-class FrontEndServer(cws.ComplexQueue):
-    def __init__(self, service_time, arrival_time, num_service, size, a, b, seed, environment, statistics,
-                 back_end_queue, hit_cache=70):
-        super(FrontEndServer, self).__init__(service_time, arrival_time, num_service, size, a, b, seed, environment,
-                                             statistics)
-        # i need to keep track of arrivals for the second queue, which are the end of service of the first for which
-        # the content is not found in cache
+class WebAccelerator(cws.ComplexQueue, sw.Queue):
+    def __init__(self, service_time_front, service_time_back, arrival_time_front, num_service_front,
+                 number_service_back, environment, service_stats, customer_stats_front, customer_stats_back,
+                 size_front, size_back, a, b, hit_cache):
+        cws.ComplexQueue.__init__(self, service_time_front, arrival_time_front, num_service_front, environment,
+                                  service_stats, customer_stats_front, size_front, a, b)
         self.hit_percentage = hit_cache
-        self.back_queue = back_end_queue
+        self.back_queue = self.BackEndServer(service_time_back, number_service_back, environment, service_stats,
+                                             customer_stats_back, size_back)
+        self.count = 0
 
-    def service(self):
-        with self.services.request() as request:
-            # this hold the request until the service is busy
-            yield request
+    def arrivals(self, packet=None):
+        return cws.ComplexQueue.arrivals(self, packet)
 
-            # when the service is no more busy, we compute the service time
-            service_time = random.expovariate(lambd=1.0 / self.service_time)
+    def endService(self, inter_service, packet):
+        # STATISTICS
+        self.customer_stats.eventRegistration(self.env.now, len(self.services.queue))
+        packet.addTimeService(self.env.now)
+        packet.computed_service = inter_service
 
-            # wait util the service won't finish
-            yield self.env.timeout(service_time)
-
-            # STATISTICS
-            self.statistics.updateService(self.env.now)
-            self.statistics.newServed()
-            # update the customer average when a service has finished
-            self.statistics.averageCustomersUpdate(self.env.now, len(self.services.queue))
-
-            rand = random.uniform(0, 1) * 100
-
-            if rand > self.hit_percentage:
-                self.back_queue.arrivals()
-
-    def arrivals(self):
-        while True:
-            # we compute the arrival time
-            inter_arrival = random.expovariate(lambd=1.0 / self.arrival_time)
-
-            # wait until a new packet arrives
-            yield self.env.timeout(inter_arrival)
-
-            if len(self.services.queue) < self.queue_size:
-
-                # STATISTICS
-                self.statistics.updateArrival(self.env.now)
-                self.statistics.newArrival()
-                # update the customer average when a new packet has arrived
-                self.statistics.averageCustomersUpdate(self.env.now, len(self.services.queue))
-
-                # call the service for a packet in the batch
-                self.env.process(self.service())
-            else:
-                # increase the number of dropped packets by one
-                self.statistics.updateDropped(1)
-
-
-class BackEndServer(cws.ComplexQueue):
-    def __init__(self, service_time, num_service, size, a, b, seed, environment, statistics):
-        super(BackEndServer, self).__init__(service_time, None, num_service, size, a, b, seed, environment,
-                                            statistics)
-
-    def arrivals(self):
-        # check if there's space in the queue
-        if len(self.services.queue) < self.queue_size:
-
-            # STATISTICS
-            self.statistics.updateArrival(self.env.now)
-            self.statistics.newArrival()
-            # update the customer average when a new packet has arrived
-            self.statistics.averageCustomersUpdate(self.env.now, len(self.services.queue))
-
-            # call the service for a packet in the batch
-            self.env.process(self.service())
+        # have to establish if the packet can be served or not by the front-end
+        rand = random.uniform(0, 1) * 100
+        if rand > self.hit_percentage:
+            self.back_queue.arrivals(packet=packet)
         else:
-            # increase the number of dropped packets by one
-            self.statistics.updateDropped(1)
+            self.service_stats.addPacket(packet)
+
+    # inner class for modelling the back-end server
+    class BackEndServer(cws.ComplexQueue):
+        def __init__(self, service_time_back, num_service, environment, service_stats, customer_stats, size):
+            cws.ComplexQueue.__init__(self, service_time_back, None, num_service, environment, service_stats,
+                                      customer_stats, size, None, None)
+
+        def arrivals(self, packet=None):
+            # check if there's space in the queue
+            if len(self.services.queue) < self.queue_size:
+                self.callForService(None, self.env.now)
+            else:
+                self.dropPackets(None, self.env.now)

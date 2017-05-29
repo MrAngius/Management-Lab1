@@ -1,94 +1,94 @@
-import simpy
-import numpy
+from new_statistics import ResponseTimeAndDroppedStatistic, CustomerAverageStatistic
 from scipy.stats import t
-from statistic_collector import Statistics
-from statistic_collector import CustomerAverage
 from simplified_web_service import Queue
 from graphs import Graphs
 from matplotlib import pyplot
+import simpy
+import numpy
 
 
-def averageCustomers(batch):
-    """function provided for manage the mean of each batch"""
-    # the first element of the vector is a tuple which has the time of the event as first value
-    time = batch[0][0]
-    customers_avg = CustomerAverage(initial_time=time)
-    for data in batch:
-        customers_avg.update(data[0], data[1])
-
-    return customers_avg.mean(list(batch).pop()[0])
-
-
-class SimulationRoh(object):
-    """class used to define a number of runs, observations, implemented using a batch-style approach"""
+class SimulateUsingBatches:
     BASE_SIM_TIME_BATCH = 10000
 
-    def __init__(self, lambda_arrival, mu_service, numb_services, confidence_interval, warm_up=False):
+    def __init__(self, lambda_arrival, mu_service, numb_services, confidence_interval, number_batches, warm_up=False):
         self.lambda_arrival = lambda_arrival
         self.mu_service = mu_service
         self.numb_services = numb_services
         self.conf_interval = confidence_interval
         self.warm_up = warm_up
+        self.stats = [ResponseTimeAndDroppedStatistic(), CustomerAverageStatistic()]
+        self.number_batches = number_batches
 
-    def runSim(self, n=10):
-        """run the simulation for extracting an observation of the process"""
+        self.mean_customer = None
+        self.mean_response = None
+        self.interval_customer = None
+        self.interval_response = None
 
-        sim_time = self.BASE_SIM_TIME_BATCH * n
+    def returnValuesSimulation(self):
+        return {"mean_resp": self.mean_response, "interval_resp": self.interval_response,
+                "mean_custom": self.mean_customer, "interval_custom": self.interval_customer}
 
-        rand_seed = 50
+    def runSim(self):
+        sim_time = self.BASE_SIM_TIME_BATCH * self.number_batches
         env = simpy.Environment()
-
-        statistics = Statistics()
-
-        queue = Queue(self.mu_service, self.lambda_arrival, self.numb_services, rand_seed, env, statistics)
+        queue = Queue(self.mu_service, self.lambda_arrival, self.numb_services, env, self.stats[0], self.stats[1])
         env.process(queue.arrivals())
         env.run(until=sim_time)
 
         while True:
-            if self.computeConfidenceOnTheFly(statistics, n):
-                return statistics, n
+            if self.evaluateConfidenceOnTheFly():
+                return 0
             else:
                 sim_time = sim_time + self.BASE_SIM_TIME_BATCH
                 env.run(until=sim_time)
-                n = n + 1
+                self.number_batches += 1
 
-    def computeConfidenceOnTheFly(self, statistics, n=10, p=0.2, final_result=False):
-
-        batches_response = statistics.batchesResponseTime(n)
-        batches_customers = statistics.batchesCustomerQueue(n)
-
-        batches_response_means = [numpy.mean(batch) for batch in batches_response]
-        batches_customers_means = [averageCustomers(batch) for batch in batches_customers]
-
-        mean_resp = numpy.mean(batches_response_means)
-        mean_custom = numpy.mean(batches_customers_means)
-
-        std_custom = numpy.std(batches_customers_means)
-        std_resp = numpy.std(batches_response_means)
-
-        interval_resp = t.interval(self.conf_interval, n, loc=mean_resp, scale=std_resp)
-        interval_custom = t.interval(self.conf_interval, n, loc=mean_custom, scale=std_custom)
-
-        z_resp = interval_resp[1] - mean_resp
-        z_custom = interval_custom[1] - mean_custom
-
+    def evaluateConfidenceOnTheFly(self):
         # implementing the batch number computing the confidence interval on-the-fly
-        if final_result:
-            return {"mean_resp": mean_resp, "interval_resp": interval_resp,
-                    "mean_custom": mean_custom, "interval_custom": interval_custom}
-        elif (2 * z_resp / mean_resp) > p and (2 * z_custom / mean_custom) > p:
+        self.computeConfidenceCustomers()
+        self.computeConfidenceResponse()
 
-            print n, (2 * z_resp / mean_resp), (2 * z_custom / mean_custom), "\n"
-            if n == 30:
+        z_customer = self.interval_customer[1] - self.interval_customer[0]
+        z_service = self.interval_response[1] - self.interval_response[0]
+
+        print (z_service / self.mean_response)
+
+        if (z_customer / self.mean_customer) > self.conf_interval \
+                and (z_service / self.mean_response) > self.conf_interval:
+            if self.number_batches == 31:
                 return True
-            return False
+            else:
+                return False
         else:
             return True
+
+    def computeConfidenceCustomers(self):
+        self.stats[1].batchesAndWarmUp(self.number_batches, self.warm_up)
+
+        batches_customers_means = [CustomerAverageStatistic.customerAverage(batch)
+                                   for batch in self.stats[1].batches_event_time_customers]
+        mean_custom = numpy.mean(batches_customers_means)
+        std_custom = numpy.std(batches_customers_means)
+        interval_custom = t.interval(self.conf_interval, self.number_batches, loc=mean_custom, scale=std_custom)
+
+        self.mean_customer, self.interval_customer = mean_custom, interval_custom
+
+    def computeConfidenceResponse(self):
+        self.stats[0].batchesAndWarmUp(self.number_batches, self.warm_up)
+
+        batches_response_means = [numpy.mean(batch) for batch in self.stats[0].batches_response_time]
+        mean_resp = numpy.mean(batches_response_means)
+        std_resp = numpy.std(batches_response_means)
+        interval_resp = t.interval(self.conf_interval, self.number_batches, loc=mean_resp, scale=std_resp)
+
+        self.mean_response, self.interval_response = mean_resp, interval_resp
 
 if __name__ == '__main__':
     LAMBDA_ARRIVAL = 10
     MU_SERVICE = 8.0
     SERVICE_NUMB = 1
+
+    MIN_NUMB_BATCHES = 15
     CONFIDENCE_INTERVAL = 0.95
 
     # vectors for collecting data
@@ -110,9 +110,9 @@ if __name__ == '__main__':
         lambda_arr -= 0.02
 
     for lambda_arr in lambda_arr_values:
-        sim = SimulationRoh(lambda_arr, MU_SERVICE, SERVICE_NUMB, CONFIDENCE_INTERVAL)
-        stats, batch_num = sim.runSim(n=25)
-        temp = sim.computeConfidenceOnTheFly(stats, batch_num, final_result=True)
+        sim = SimulateUsingBatches(lambda_arr, MU_SERVICE, SERVICE_NUMB, CONFIDENCE_INTERVAL, MIN_NUMB_BATCHES)
+        sim.runSim()
+        temp = sim.returnValuesSimulation()
 
         # saving the data in separate lists
         means_resp.append(temp["mean_resp"])
