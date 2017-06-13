@@ -62,10 +62,10 @@ class SimulationAdvancedCacheServer(SimulationAdvancedUsingBatches):
 if __name__ == '__main__':
     LAMBDA_ARRIVAL_FRONT = 60.0
     MU_SERVICE_FRONT = 8.0
-    MU_SERVICE_BACK = 10.0
+    MU_SERVICE_BACK = 15.0
     SERVICE_NUMB_FRONT = 1
     SERVICE_NUMB_BACK = 1
-    HIT_CACHE = 30
+    HIT_CACHE = 45
 
     MIN_NUMB_BATCHES = 15
     CONFIDENCE_INTERVAL = 0.95
@@ -99,7 +99,7 @@ if __name__ == '__main__':
     while lambda_arr > MU_SERVICE_FRONT:
         lambda_arr_values.append(lambda_arr)
         roh.append(MU_SERVICE_FRONT / lambda_arr)
-        lambda_arr -= 0.5
+        lambda_arr -= 1
 
     time_debug = 0
 
@@ -138,7 +138,9 @@ if __name__ == '__main__':
     Graphs.meanAndConfidenceInterval(roh, means_dropped, lower_interval_dropped,
                                      upper_interval_dropped,
                                      "Average Packet Dropped", "Packer Dropped Front Server")
-    Graphs.meanAndConfidenceInterval(roh, means_custom_back, lower_interval_custom_back, upper_interval_custom_back,
-                                     "Average Customers", "Customer Buffer Occupancy Back Server")
+    Graphs.meanAndConfidenceInterval([1.0 / x for x in lambda_arr_values], means_custom_back,
+                                     lower_interval_custom_back,
+                                     upper_interval_custom_back, "Average Customers",
+                                     "Customer Buffer Occupancy Back Server", x_label="lambda front")
 
     pyplot.show()

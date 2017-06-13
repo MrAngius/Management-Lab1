@@ -5,11 +5,11 @@ import numpy
 class Graphs(object):
 
     @staticmethod
-    def meanAndConfidenceInterval(roh, means, lower_interval, upper_interval, y_label, title):
+    def meanAndConfidenceInterval(roh, means, lower_interval, upper_interval, y_label, title, x_label='roh'):
         pyplot.figure()
 
         pyplot.plot(roh, means, 'g')
-        pyplot.xlabel('roh')
+        pyplot.xlabel(x_label)
         pyplot.ylabel(y_label)
         pyplot.title(title)
         pyplot.grid(True)

@@ -84,11 +84,11 @@ class SimulateUsingBatches:
         self.mean_response, self.interval_response = mean_resp, interval_resp
 
 if __name__ == '__main__':
-    LAMBDA_ARRIVAL = 10
+    LAMBDA_ARRIVAL = 10.0
     MU_SERVICE = 8.0
     SERVICE_NUMB = 1
 
-    MIN_NUMB_BATCHES = 15
+    MIN_NUMB_BATCHES = 15  # not the http request one but simulation batches
     CONFIDENCE_INTERVAL = 0.95
 
     # vectors for collecting data
@@ -101,7 +101,7 @@ if __name__ == '__main__':
 
     lambda_arr_values = []
     roh = []
-    lambda_arr = 10.0
+    lambda_arr = LAMBDA_ARRIVAL
 
     # creation of the roh array
     while lambda_arr > MU_SERVICE:
