@@ -13,11 +13,13 @@ class ResponseTimeAndDroppedStatistic:
         self.warm_upped = False
         self.computed_dropped = False
         self.computed_response = False
+        self.packet_arrived = 0
 
     def addPacket(self, packet):
         self.packets.append(packet)
         self.computed_response = False
         self.computed_dropped = False
+        self.packet_arrived += 1
 
     def batchesAndWarmUp(self, num_batches, warm_up=False):
         self.computeDroppedPackets()

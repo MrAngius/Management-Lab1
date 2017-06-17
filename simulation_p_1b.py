@@ -20,7 +20,7 @@ class SimulationAdvancedUsingBatches(SimulateUsingBatches):
 
     def computeConfidenceDropped(self, index=0):
         self.stats[index].batchesAndWarmUp(self.number_batches, self.warm_up)
-        batches_dropped_count = [sum(batch) for batch in self.stats[0].batches_dropped]
+        batches_dropped_count = [float(sum(batch)) / len(batch) for batch in self.stats[0].batches_dropped]
         mean_drop = numpy.mean(batches_dropped_count)
         std_drop = numpy.std(batches_dropped_count)
 
@@ -82,7 +82,7 @@ if __name__ == '__main__':
     while lambda_arr > MU_SERVICE:
         lambda_arr_values.append(lambda_arr)
         roh.append(MU_SERVICE / lambda_arr)
-        lambda_arr -= .5
+        lambda_arr -= 0.5
 
     time_debug = 0
 

@@ -65,7 +65,7 @@ if __name__ == '__main__':
     MU_SERVICE_BACK = 15.0
     SERVICE_NUMB_FRONT = 1
     SERVICE_NUMB_BACK = 1
-    HIT_CACHE = 45
+    HIT_CACHE = 80
 
     MIN_NUMB_BATCHES = 15
     CONFIDENCE_INTERVAL = 0.95
@@ -99,7 +99,7 @@ if __name__ == '__main__':
     while lambda_arr > MU_SERVICE_FRONT:
         lambda_arr_values.append(lambda_arr)
         roh.append(MU_SERVICE_FRONT / lambda_arr)
-        lambda_arr -= 1
+        lambda_arr -= 1.5
 
     time_debug = 0
 
